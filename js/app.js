@@ -60,11 +60,68 @@ new ResizeObserver(resize).observe(viewerEl);
     renderer.render(scene, camera);
 })();
 
-function rgbOf(colour, renderType) {
-    if (renderType & 2) {
-        const t = textures[colour];
-        return t ? (t[0] << 16) | (t[1] << 8) | t[2] : 0x808080;
-    }
+const SHAPE_LABEL = {
+    0: 'Straight wall', 1: 'Diagonal corner', 2: 'L corner', 3: 'Square corner', 4: 'Wall decor',
+    5: 'Wall decor (offset)', 6: 'Diagonal decor (offset)', 7: 'Diagonal decor', 8: 'Diagonal decor (both)',
+    9: 'Diagonal wall', 10: 'Object', 11: 'Object (diagonal)', 12: 'Roof', 13: 'Roof diagonal (edge)',
+    14: 'Roof diagonal', 15: 'Roof L (concave)', 16: 'Roof L (convex)', 17: 'Flat roof', 18: 'Roof edge',
+    19: 'Roof edge corner', 20: 'Roof edge L', 21: 'Roof edge square corner', 22: 'Ground decor'
+};
+
+const textureCache = new Map();
+
+// load a game texture, turning its magenta (#ff00ff) pixels transparent like the game does
+function loadTexture(id) {
+    if (textureCache.has(id)) return textureCache.get(id);
+    const promise = new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => {
+            const c = document.createElement('canvas');
+            c.width = img.width;
+            c.height = img.height;
+            const ctx = c.getContext('2d');
+            ctx.drawImage(img, 0, 0);
+            const data = ctx.getImageData(0, 0, c.width, c.height);
+            for (let i = 0; i < data.data.length; i += 4) {
+                if (data.data[i] === 255 && data.data[i + 1] === 0 && data.data[i + 2] === 255) data.data[i + 3] = 0;
+            }
+            ctx.putImageData(data, 0, 0);
+            const tex = new THREE.CanvasTexture(c);
+            tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+            tex.magFilter = THREE.NearestFilter;
+            resolve(tex);
+        };
+        img.onerror = () => resolve(null);
+        img.src = `textures/${id}.png`;
+    });
+    textureCache.set(id, promise);
+    return promise;
+}
+
+const isTextured = (renderType) => (renderType & 3) >= 2;
+
+// Work out where each corner of a textured face sits on the texture. The model gives three
+// "texture points" (P, M, N): P is the texture's corner, P->M runs along its width and P->N
+// along its height. Each face corner is projected onto that frame.
+function textureUv(m, t, v) {
+    const P = [m.x[m.tp[t]], m.y[m.tp[t]], m.z[m.tp[t]]];
+    const M = [m.x[m.tm[t]], m.y[m.tm[t]], m.z[m.tm[t]]];
+    const N = [m.x[m.tn[t]], m.y[m.tn[t]], m.z[m.tn[t]]];
+    const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+    const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+    const U = sub(M, P);
+    const V = sub(N, P);
+    const n = cross(U, V);
+    const cu = cross(V, n);
+    const cv = cross(n, U);
+    const d = sub([m.x[v], m.y[v], m.z[v]], P);
+    const du = dot(U, cu);
+    const dv = dot(V, cv);
+    return [du ? dot(d, cu) / du : 0, dv ? 1 - dot(d, cv) / dv : 0];
+}
+
+function rgbOf(colour) {
     return PALETTE[colour & 0xffff];
 }
 
@@ -73,36 +130,54 @@ function buildMesh(models, entry) {
     const mirror = !!entry.mi;
     const opaque = { pos: [], col: [] };
     const trans = { pos: [], col: [] };
+    const textured = new Map(); // texture id -> { pos, uv }
 
     for (const m of models) {
-        // apply recolours in the same order the game does
+        // apply recolours/retextures in the same order the game does
         const colour = Int32Array.from(m.colour);
         for (const [src, dst] of entry.rc || []) {
             for (let f = 0; f < m.numFaces; f++) {
-                if (!(m.renderType[f] & 2) && colour[f] === src) colour[f] = dst;
+                if (!isTextured(m.renderType[f]) && colour[f] === src) colour[f] = dst;
             }
         }
         for (const [src, dst] of entry.rt || []) {
             for (let f = 0; f < m.numFaces; f++) {
-                if ((m.renderType[f] & 2) && colour[f] === src) colour[f] = dst;
+                if (isTextured(m.renderType[f]) && colour[f] === src) colour[f] = dst;
             }
         }
+
+        const place = (v) => {
+            // game: y points down
+            const px = (m.x[v] * scale[0]) / 128;
+            const py = (-m.y[v] * scale[1]) / 128;
+            let pz = (m.z[v] * scale[2]) / 128;
+            if (mirror) pz = -pz;
+            return [px, py, pz];
+        };
 
         for (let f = 0; f < m.numFaces; f++) {
             const a = m.alpha[f];
             if (a >= 255) continue;
+            const corners = [m.fa[f], m.fb[f], m.fc[f]];
+
+            if (isTextured(m.renderType[f]) && textures[colour[f]]) {
+                const t = m.renderType[f] >> 2;
+                if (!textured.has(colour[f])) textured.set(colour[f], { pos: [], uv: [] });
+                const bucket = textured.get(colour[f]);
+                for (const v of corners) {
+                    bucket.pos.push(...place(v));
+                    bucket.uv.push(...(t < m.tp.length ? textureUv(m, t, v) : [0, 0]));
+                }
+                continue;
+            }
+
             const target = a > 0 ? trans : opaque;
-            const rgb = rgbOf(colour[f], m.renderType[f]);
+            const rgb = rgbOf(colour[f]);
             const r = ((rgb >> 16) & 0xff) / 255;
             const g = ((rgb >> 8) & 0xff) / 255;
             const b = (rgb & 0xff) / 255;
-            for (const v of [m.fa[f], m.fb[f], m.fc[f]]) {
-                // game: y points down, z forward
-                const px = (m.x[v] * scale[0]) / 128;
-                const py = (-m.y[v] * scale[1]) / 128;
-                let pz = (m.z[v] * scale[2]) / 128;
-                if (mirror) pz = -pz;
-                target.pos.push(px, py, pz);
+            for (const v of corners) {
+                target.pos.push(...place(v));
                 if (target === trans) target.col.push(r, g, b, 1 - a / 255);
                 else target.col.push(r, g, b);
             }
@@ -110,10 +185,14 @@ function buildMesh(models, entry) {
     }
 
     const group = new THREE.Group();
-    const add = (bucket, transparent) => {
-        if (!bucket.pos.length) return;
+    const geometry = (pos) => {
         const geo = new THREE.BufferGeometry();
-        geo.setAttribute('position', new THREE.Float32BufferAttribute(bucket.pos, 3));
+        geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+        return geo;
+    };
+    const addColoured = (bucket, transparent) => {
+        if (!bucket.pos.length) return;
+        const geo = geometry(bucket.pos);
         geo.setAttribute('color', new THREE.Float32BufferAttribute(bucket.col, transparent ? 4 : 3));
         geo.computeVertexNormals();
         const mat = new THREE.MeshLambertMaterial({
@@ -125,8 +204,28 @@ function buildMesh(models, entry) {
         });
         group.add(new THREE.Mesh(geo, mat));
     };
-    add(opaque, false);
-    add(trans, true);
+    addColoured(opaque, false);
+    addColoured(trans, true);
+
+    for (const [id, bucket] of textured) {
+        const geo = geometry(bucket.pos);
+        geo.setAttribute('uv', new THREE.Float32BufferAttribute(bucket.uv, 2));
+        geo.computeVertexNormals();
+        const avg = textures[id].avg;
+        const mat = new THREE.MeshLambertMaterial({
+            color: new THREE.Color(avg[0] / 255, avg[1] / 255, avg[2] / 255), // shown until the texture loads
+            side: THREE.DoubleSide,
+            flatShading: true,
+            alphaTest: 0.5
+        });
+        loadTexture(id).then((tex) => {
+            if (!tex) return;
+            mat.map = tex;
+            mat.color.set(0xffffff);
+            mat.needsUpdate = true;
+        });
+        group.add(new THREE.Mesh(geo, mat));
+    }
     return group;
 }
 
@@ -155,8 +254,11 @@ async function loadModel(name) {
     return model;
 }
 
-async function show(entry) {
+const variantsEl = $('variants');
+
+async function show(entry, variant = 0) {
     renderInfo(entry);
+    renderVariants(entry, variant);
     if (current) {
         scene.remove(current);
         current.traverse((o) => {
@@ -165,13 +267,14 @@ async function show(entry) {
         });
         current = null;
     }
-    if (!entry.m.length) {
+    const names = entry.v ? entry.v[variant][1] : entry.m;
+    if (!names.length) {
         statusEl.textContent = 'This entry has no model.';
         return;
     }
     statusEl.textContent = 'Loading…';
     try {
-        const models = await Promise.all(entry.m.map(loadModel));
+        const models = await Promise.all(names.map(loadModel));
         current = buildMesh(models, entry);
         scene.add(current);
         frame(current);
@@ -179,6 +282,20 @@ async function show(entry) {
     } catch (e) {
         statusEl.textContent = e.message;
     }
+}
+
+// objects with more than one shape (walls, corners, roof pieces...) get a button per shape
+function renderVariants(entry, active) {
+    variantsEl.textContent = '';
+    if (!entry.v) return;
+    entry.v.forEach(([shape, models], i) => {
+        const b = document.createElement('button');
+        b.textContent = `${shape}: ${SHAPE_LABEL[shape] ?? 'shape ' + shape}`;
+        b.title = models.join(', ');
+        if (i === active) b.classList.add('active');
+        b.addEventListener('click', () => show(entry, i));
+        variantsEl.appendChild(b);
+    });
 }
 
 // ---------- search ----------
@@ -190,7 +307,7 @@ function renderInfo(e) {
         ['ID', e.id],
         ['Name', e.name || '—'],
         ['Debug name', e.n],
-        ['Models', e.m.length ? e.m.join(', ') : 'none'],
+        ['Models', e.v ? e.v.map(([shape, m]) => `${m.join(', ')} (shape ${shape})`).join(', ') : (e.m.length ? e.m.join(', ') : 'none')],
     ];
     if (e.rcs) rows.push(['Recolours', e.rcs.map(([s, d]) => `${s} → ${d}`).join(', ') + '  (as in the config file)']);
     if (e.rt) rows.push(['Retextures', e.rt.map(([s, d]) => `${s} → ${d}`).join(', ')]);

@@ -10,7 +10,8 @@ Example:
 
 Writes:
     data/index.json     every loc, npc, obj and raw model, with IDs, names and model lists
-    data/textures.json  average colour of each texture (textured faces are drawn in this colour)
+    data/textures.json  each texture's name and average colour
+    textures/<id>.png   the game's textures (bricks, wood, ...), copied as-is
     models/<name>.ob2   the raw model files, copied as-is (decoded in the browser)
 """
 
@@ -39,8 +40,6 @@ def read_pack(content, kind):
 
 def config_files(content, ext):
     for dirpath, dirnames, filenames in os.walk(os.path.join(content, 'scripts')):
-        # _unpack holds reference dumps of older revisions, not live config
-        dirnames[:] = [d for d in dirnames if d != '_unpack']
         for name in filenames:
             if name.endswith(ext):
                 yield os.path.join(dirpath, name)
@@ -152,6 +151,20 @@ def model_list(props, keys):
     return names
 
 
+def copy_textures(content, tex_ids):
+    out_dir = os.path.join(ROOT, 'textures')
+    if os.path.isdir(out_dir):
+        shutil.rmtree(out_dir)
+    os.makedirs(out_dir)
+    copied = {}
+    for name, tid in tex_ids.items():
+        src = os.path.join(content, 'textures', f'{name}.png')
+        if os.path.exists(src):
+            shutil.copyfile(src, os.path.join(out_dir, f'{tid}.png'))
+            copied[tid] = name
+    return copied
+
+
 def texture_colours(content, tex_ids):
     try:
         from PIL import Image
@@ -236,10 +249,32 @@ def main():
             entry['mi'] = 1
         entries.append(entry)
 
+    # A loc's model name is a base name. The game picks a variant by the shape number used in the
+    # map file: <name> or <name>_8 for a normal object, <name>_1 for a straight wall, and so on
+    # (same table as the engine's tools/pack/config/LocConfig.ts).
+    shape_suffix = {10: '_8', 0: '_1', 1: '_2', 2: '_3', 3: '_4', 4: '_q', 9: '_5', 5: '_w', 6: '_r', 7: '_e',
+                    8: '_t', 11: '_9', 22: '_0', 12: '_a', 13: '_s', 14: '_d', 15: '_f', 16: '_g', 17: '_h',
+                    18: '_z', 19: '_x', 20: '_c', 21: '_v'}
     loc_ids = read_pack(content, 'loc')
     for debugname, props, file in parse_configs(content, '.loc'):
+        if debugname not in loc_ids:
+            continue
+        bases = model_list(props, ['model', 'model2', 'model3', 'model4', 'model5'])
+        variants = {}
+        for base in bases:
+            if base in available:
+                variants.setdefault(10, []).append(base)
+            for shape, suffix in shape_suffix.items():
+                if base + suffix in available:
+                    variants.setdefault(shape, []).append(base + suffix)
         scale = [to_int(first(props, k), 128) for k in ('resizex', 'resizey', 'resizez')]
-        add('loc', debugname, loc_ids, props, file, ['model', 'model2', 'model3'], scale if scale != [128, 128, 128] else None)
+        add('loc', debugname, loc_ids, props, file, [], scale if scale != [128, 128, 128] else None)
+        entry = entries[-1]
+        if variants:
+            ordered = sorted(variants.items(), key=lambda kv: (kv[0] != 10, kv[0]))
+            entry['m'] = ordered[0][1]
+            if len(ordered) > 1:
+                entry['v'] = [[shape, models] for shape, models in ordered]
 
     npc_ids = read_pack(content, 'npc')
     for debugname, props, file in parse_configs(content, '.npc'):
@@ -263,8 +298,11 @@ def main():
     os.makedirs(data_out, exist_ok=True)
     with open(os.path.join(data_out, 'index.json'), 'w') as f:
         json.dump(entries, f, separators=(',', ':'))
+    names = copy_textures(content, tex_ids)
+    colours = texture_colours(content, tex_ids)
+    textures = {tid: {'name': name, 'avg': colours.get(tid, [128, 128, 128])} for tid, name in names.items()}
     with open(os.path.join(data_out, 'textures.json'), 'w') as f:
-        json.dump(texture_colours(content, tex_ids), f, separators=(',', ':'))
+        json.dump(textures, f, separators=(',', ':'))
 
     counts = {k: sum(1 for e in entries if e['t'] == k) for k in order}
     print(f"{len(available)} model files copied")

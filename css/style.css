@@ -177,6 +177,37 @@ tbody tr.no-model td {
     pointer-events: none;
 }
 
+#variants {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+}
+
+#variants:empty {
+    display: none;
+}
+
+#variants button {
+    padding: 4px 10px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    color: var(--text);
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+#variants button:hover {
+    border-color: var(--muted);
+}
+
+#variants button.active {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
 .hint {
     margin: 6px 0 12px;
     color: var(--muted);

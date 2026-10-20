@@ -36,13 +36,16 @@ still works, but textured faces are drawn grey.
 ## How it works
 
 - `tools/build.py` reads the ID lists in `content/pack/*.pack`, the `.loc`, `.npc` and `.obj`
-  configs (skipping `_unpack`), and copies every `.ob2` model file. It writes
-  `data/index.json` and `data/textures.json`.
+  configs (including the older definitions in `_unpack`, which the game also loads), and copies
+  every `.ob2` model and texture. It writes `data/index.json` and `data/textures.json`.
 - `js/ob2.js` decodes `.ob2` models in the browser, ported from the Lost City client's
   `Model.ts`, and recreates the game's colour palette.
 - `js/app.js` handles search and renders with three.js (`vendor/`, MIT licensed). Recolours,
   retextures, resizing and mirroring from the configs are applied, so a rune platebody shows
   up rune-coloured rather than in the base model's colours.
 
-It's a simplified renderer: no animations, and textured faces use the texture's average
-colour instead of the full texture.
+Objects that come in several shapes (walls, corners, roof pieces) get a button per shape. The
+shape numbers match the second number on a `==== LOC ====` line in a map file, so
+`2 7 26: 1913 0 2` uses shape 0 (straight wall).
+
+It's a simplified renderer: no animations, and lighting is approximate.

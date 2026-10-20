@@ -50,7 +50,8 @@ export function decodeOb2(bytes) {
     pos += lenFaceIndex;
     const faceColourOffset = pos;
     pos += numFaces * 2;
-    pos += numT * 6; // texture axes, not needed for flat viewing
+    const faceTextureOffset = pos;
+    pos += numT * 6;
     const vertexXOffset = pos;
     pos += lenX;
     const vertexYOffset = pos;
@@ -120,7 +121,18 @@ export function decodeOb2(bytes) {
         fc[f] = c;
     }
 
-    return { numPoints, numFaces, x, y, z, fa, fb, fc, colour, renderType, alpha };
+    // texture triangles: three vertex indices that define how a texture is laid across a face
+    const tp = new Int32Array(numT);
+    const tm = new Int32Array(numT);
+    const tn = new Int32Array(numT);
+    const rtex = new Reader(bytes, faceTextureOffset);
+    for (let i = 0; i < numT; i++) {
+        tp[i] = rtex.g2();
+        tm[i] = rtex.g2();
+        tn[i] = rtex.g2();
+    }
+
+    return { numPoints, numFaces, x, y, z, fa, fb, fc, colour, renderType, alpha, tp, tm, tn };
 }
 
 // The game's 16-bit HSL colour -> RGB table (Pix3D.initColourTable), at the client's default brightness.
