@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>274 Model Viewer</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="icon" href="data:,">
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "./vendor/three.module.min.js",
+                "three/addons/": "./vendor/"
+            }
+        }
+    </script>
+</head>
+<body>
+    <header>
+        <h1>274 Model Viewer</h1>
+        <p>Every object, NPC, item and model in the November 2004 game data.</p>
+    </header>
+
+    <main>
+        <section class="browser">
+            <div class="search">
+                <label>
+                    <span>ID</span>
+                    <input id="search-id" type="text" inputmode="numeric" placeholder="e.g. 2213" autocomplete="off">
+                </label>
+                <label>
+                    <span>Name</span>
+                    <input id="search-name" type="text" placeholder="e.g. bankbooth" autocomplete="off">
+                </label>
+            </div>
+            <div class="filters">
+                <label><input class="type-filter" type="checkbox" value="loc" checked> Objects</label>
+                <label><input class="type-filter" type="checkbox" value="npc" checked> NPCs</label>
+                <label><input class="type-filter" type="checkbox" value="obj" checked> Items</label>
+                <label><input class="type-filter" type="checkbox" value="model"> Raw models</label>
+            </div>
+            <p id="result-count" class="count"></p>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr><th class="num">#</th><th>Type</th><th class="num">ID</th><th>Debug name</th><th>Name</th></tr>
+                    </thead>
+                    <tbody id="results-body"></tbody>
+                </table>
+                <p id="loading" class="count">Loading index…</p>
+            </div>
+        </section>
+
+        <section class="detail">
+            <div id="viewer">
+                <span id="viewer-status">Pick a row to view its model.</span>
+            </div>
+            <p class="hint">Drag to rotate · scroll to zoom · right-drag to pan</p>
+            <dl id="info"></dl>
+        </section>
+    </main>
+
+    <script type="module" src="js/app.js"></script>
+</body>
+</html>
